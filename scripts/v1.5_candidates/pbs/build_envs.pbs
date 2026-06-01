@@ -1,0 +1,100 @@
+#!/bin/bash
+#PBS -N msg_s4_build_envs
+#PBS -l select=1:ncpus=8:mem=32gb:scratch_local=50gb
+#PBS -l walltime=6:00:00
+#PBS -j oe
+#
+# Build BOTH reproducible MetaCentrum envs for the MassSpecGym_s4 candidate
+# pipeline. Submit from a frontend:
+#   cd /storage/plzen1/home/jozefov_147/projects/MassSpecGym_s4
+#   qsub scripts/v1.5_candidates/pbs/build_envs.pbs
+#
+# Two envs are required because molpher-lib pins RDKit 2021.03 (Py3.9) while
+# the massspecgym package pins rdkit==2023.9.4 (Py>=3.11): they cannot share a
+# solve. Canonicalisation stays consistent because every Molpher morph is
+# RE-canonicalised in the main env (rdkit 2023.9.4) before entering any pool.
+#
+#   massspecgym_s4          – main: rdkit 2023.9.4 + editable massspecgym (CPU torch)
+#   massspecgym_s4_molpher  – morphing only: molpher-lib + its pinned RDKit 2021
+set -euo pipefail
+
+# MetaCentrum module bootstrap references unset internal vars; relax nounset
+# only around site init, keep strict mode for our own logic.
+set +u
+source /etc/profile || true
+set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV_MAIN=$PLZEN/.conda/envs/massspecgym_s4
+ENV_MOLPHER=$PLZEN/.conda/envs/massspecgym_s4_molpher
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/build_envs_${PBS_JOBID:-manual}.log
+
+mkdir -p "$PLZEN/.conda/envs" "$RESULTS" "$SCRATCHDIR/tmp"
+export TMPDIR="$SCRATCHDIR/tmp"
+export PIP_CACHE_DIR="$SCRATCHDIR/pip-cache"
+export CONDA_PKGS_DIRS="$SCRATCHDIR/conda-pkgs"
+export MAMBA_ROOT_PREFIX="$PLZEN/.conda"
+mkdir -p "$PIP_CACHE_DIR" "$CONDA_PKGS_DIRS"
+
+{
+  echo "host $(hostname -f)"
+  echo "whoami $(whoami)"
+  echo "REPO $REPO"
+  echo "ENV_MAIN $ENV_MAIN"
+  echo "ENV_MOLPHER $ENV_MOLPHER"
+} | tee "$LOG"
+
+test "$(whoami)" = "jozefov_147" || { echo "wrong account" | tee -a "$LOG"; exit 10; }
+test -d "$REPO/.git" || { echo "missing repo $REPO" | tee -a "$LOG"; exit 11; }
+
+set +u
+module add mambaforge 2>>"$LOG" || module load mambaforge 2>>"$LOG"
+set -u
+command -v mamba | tee -a "$LOG"
+
+# --- main env: massspecgym (editable) + CPU torch ----------------------------
+# Conda owns only python+pip; pip owns the exact-pinned massspecgym stack
+# (rdkit==2023.9.4, numpy==1.24.4, ...) so there is no conda/pip version split.
+echo "=== building $ENV_MAIN ===" | tee -a "$LOG"
+mamba create -y -p "$ENV_MAIN" --override-channels -c conda-forge \
+  python=3.11 pip setuptools wheel >>"$LOG" 2>&1
+"$ENV_MAIN/bin/python" -m pip install --upgrade pip setuptools wheel >>"$LOG" 2>&1
+# CPU-only torch first; '2.3.0+cpu' satisfies massspecgym's 'torch==2.3.0'
+# pin, so the editable install does not pull the CUDA wheel afterwards.
+"$ENV_MAIN/bin/python" -m pip install --index-url https://download.pytorch.org/whl/cpu \
+  torch==2.3.0 >>"$LOG" 2>&1
+"$ENV_MAIN/bin/python" -m pip install -e "$REPO" >>"$LOG" 2>&1
+# pyarrow + tqdm are used by the pipeline but missing from setup.py.
+"$ENV_MAIN/bin/python" -m pip install pyarrow tqdm >>"$LOG" 2>&1
+
+echo "=== smoke test $ENV_MAIN ===" | tee -a "$LOG"
+"$ENV_MAIN/bin/python" - <<'PY' | tee -a "$LOG"
+import rdkit, torch, pyarrow
+from massspecgym.utils import rdkit_canonical_smiles, _strip_stereo_parallel
+assert rdkit.__version__.startswith("2023.09"), rdkit.__version__
+assert torch.version.cuda is None, "expected CPU-only torch"
+assert rdkit_canonical_smiles("C1=CC=CC=C1") == "c1ccccc1"
+print("main OK: rdkit", rdkit.__version__, "torch", torch.__version__)
+PY
+
+# --- molpher env: morphing only ----------------------------------------------
+echo "=== building $ENV_MOLPHER ===" | tee -a "$LOG"
+mamba create -y -p "$ENV_MOLPHER" --override-channels -c conda-forge -c lich \
+  python=3.9 molpher-lib rdkit pandas numpy tqdm >>"$LOG" 2>&1
+
+echo "=== smoke test $ENV_MOLPHER ===" | tee -a "$LOG"
+"$ENV_MOLPHER/bin/python" - <<'PY' | tee -a "$LOG"
+import rdkit, molpher.core
+from molpher.core.morphing.operators import RerouteBond
+print("molpher OK: rdkit", rdkit.__version__)
+PY
+
+# --- export exact lockfiles for reproducibility ------------------------------
+mkdir -p "$REPO/scripts/v1.5_candidates/envs"
+mamba env export -p "$ENV_MAIN"    > "$REPO/scripts/v1.5_candidates/envs/massspecgym_s4.lock.yml"    2>>"$LOG" || true
+mamba env export -p "$ENV_MOLPHER" > "$REPO/scripts/v1.5_candidates/envs/massspecgym_s4_molpher.lock.yml" 2>>"$LOG" || true
+
+echo "OK build_envs (main + molpher)" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true

@@ -1,3 +1,7 @@
+# MassSpecGym_s4 candidate-pipeline data: staged pools, fingerprints, candidate
+# JSONs (multi-GB) live under _data/ and must never be committed.
+/_data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
