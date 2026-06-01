@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N msg_s4_pubchem
+#PBS -l select=1:ncpus=48:mem=128gb:scratch_local=20gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#
+# Phase 3: RDKit re-canonicalise raw PubChem into an attribute-complete,
+# ik2d-deduplicated pool. mem is high to hold the ~100M-key dedup set.
+# Submit (after env build):
+#   qsub -W depend=afterok:<envjob> scripts/v1.5_candidates/pbs/run_build_pubchem.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+RESULTS=$REPO/_metacentrum_results
+SRC=$PLZEN/projects/msngym/data/candidates_generation/pubchem_canon_molecules/pubchem.tsv
+LOG=$RESULTS/pubchem_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$DATA/pools/pubchem" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+test -f "$SRC" || { echo "missing PubChem source $SRC"; exit 11; }
+
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/build_pubchem_rdkit_pool.py \
+  --input-tsv "$SRC" --smiles-col smiles \
+  --out-parquet "$DATA/pools/pubchem/pubchem_rdkit_canon_pool.parquet" \
+  --n-workers 48 --chunk-size 2000000 2>&1 | tee "$LOG"
+echo "OK pubchem pool" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true

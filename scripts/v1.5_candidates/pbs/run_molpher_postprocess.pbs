@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N msg_s4_molpher_post
+#PBS -l select=1:ncpus=48:mem=64gb:scratch_local=10gb
+#PBS -l walltime=8:00:00
+#PBS -j oe
+#
+# Phase 4b: canonicalise (rdkit 2023.9.4) + validate + dedup the raw Molpher
+# morphs, recompute+save formula/exact_mass, emit per-query JSON + morph pool.
+# Submit (after molpher generate):
+#   qsub -W depend=afterok:<genjob> scripts/v1.5_candidates/pbs/run_molpher_postprocess.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/molpher_post_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/postprocess_molpher_morphs.py \
+  --in-json          "$DATA/pools/molpher/molpher_morphs_raw.json" \
+  --queries-parquet  "$DATA/queries/massspecgym_query_molecules.parquet" \
+  --out-json         "$DATA/pools/molpher/molpher_morphs_per_query.json" \
+  --out-pool-parquet "$DATA/pools/molpher/molpher_morphs_pool.parquet" \
+  --n-workers 48 2>&1 | tee "$LOG"
+echo "OK molpher postprocess" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true

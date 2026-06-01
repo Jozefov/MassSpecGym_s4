@@ -1,0 +1,42 @@
+#!/bin/bash
+#PBS -N msg_s4_molpher_gen
+#PBS -l select=1:ncpus=32:mem=48gb:scratch_local=10gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+#
+# Phase 4a: generate per-query Molpher morphs (top-512 most similar). Multi-day;
+# checkpoint/resume so a walltime hit just needs a resubmit (it continues).
+# Submit (after extract):
+#   qsub -W depend=afterok:<extractjob> scripts/v1.5_candidates/pbs/run_molpher_generate.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+ENVM=$PLZEN/.conda/envs/massspecgym_s4_molpher
+DATA=$REPO/_data/v1.5
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/molpher_gen_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$DATA/pools/molpher" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+
+cd "$REPO"
+# Dump query SMILES to a plain text file using the MAIN env (molpher env lacks
+# pyarrow); the morph generator reads one SMILES per line.
+"$ENV/bin/python" - "$DATA/queries/massspecgym_query_molecules.parquet" \
+                     "$DATA/queries/massspecgym_query_smiles.txt" <<'PY'
+import sys, pyarrow.parquet as pq
+df = pq.read_table(sys.argv[1], columns=["smiles"]).to_pandas()
+with open(sys.argv[2], "w") as f:
+    f.write("\n".join(map(str, df["smiles"].tolist())))
+print("wrote", len(df), "query SMILES")
+PY
+
+export LD_LIBRARY_PATH="$ENVM/lib:${LD_LIBRARY_PATH:-}"
+"$ENVM/bin/python" scripts/v1.5_candidates/generate_molpher_morphs.py \
+  --queries-txt "$DATA/queries/massspecgym_query_smiles.txt" \
+  --out-json    "$DATA/pools/molpher/molpher_morphs_raw.json" \
+  --n-workers 32 2>&1 | tee "$LOG"
+echo "OK molpher generate" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true
