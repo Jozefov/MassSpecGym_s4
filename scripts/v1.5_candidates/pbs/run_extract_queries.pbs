@@ -1,0 +1,45 @@
+#!/bin/bash
+#PBS -N msg_s4_extract
+#PBS -l select=1:ncpus=16:mem=32gb:scratch_local=10gb
+#PBS -l walltime=2:00:00
+#PBS -j oe
+#
+# Phase 1: extract unique query molecules from the staged spectra TSV.
+# Runs build_msg_s4_candidates.py --stage extract (RDKit-canon + stereo-strip +
+# recompute formula/exact_mass/inchikey_2d), then saves the result under a
+# source-explicit name. Submit:
+#   cd /storage/plzen1/home/jozefov_147/projects/MassSpecGym_s4
+#   qsub scripts/v1.5_candidates/pbs/run_extract_queries.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/extract_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/build_msg_s4_candidates.py \
+  --stage extract \
+  --input-tsv "$DATA/queries/massspecgym_spectra.tsv" \
+  --out-dir   "$DATA/queries" \
+  --n-workers 16 2>&1 | tee "$LOG"
+
+# build_msg hardcodes extract_unique_mols.parquet; save under the clear name.
+cp -f "$DATA/queries/extract_unique_mols.parquet" \
+      "$DATA/queries/massspecgym_query_molecules.parquet"
+
+"$ENV/bin/python" - "$DATA/queries/massspecgym_query_molecules.parquet" <<'PY' 2>&1 | tee -a "$LOG"
+import sys, pyarrow.parquet as pq
+df = pq.read_table(sys.argv[1]).to_pandas()
+print("queries:", len(df), "cols:", list(df.columns))
+print("folds:", df["fold"].value_counts().to_dict())
+print("nulls:", df[["inchikey_2d","smiles","formula","exact_mass"]].isna().sum().to_dict())
+print("ik2d_unique:", df["inchikey_2d"].nunique(), "smiles_unique:", df["smiles"].nunique())
+PY
+echo "OK extract" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true

@@ -1,0 +1,39 @@
+#!/bin/bash
+#PBS -N msg_s4_fps
+#PBS -l select=1:ncpus=48:mem=64gb:scratch_local=60gb
+#PBS -l walltime=12:00:00
+#PBS -j oe
+#
+# Compute packed Morgan FPs for any pool parquet. Parameterised via -v:
+#   qsub -v INPUT=<pool.parquet>,OUTPREFIX=<dir/stem>[,SMILES_COL=smiles] \
+#        scripts/v1.5_candidates/pbs/run_compute_fps.pbs
+# e.g. S4 pool:
+#   DATA=/storage/plzen1/home/jozefov_147/projects/MassSpecGym_s4/_data/v1.5
+#   qsub -v INPUT=$DATA/pools/s4/s4_generated_pool.parquet,\
+#OUTPREFIX=$DATA/pools/s4/s4_generated_pool run_compute_fps.pbs
+#
+# 15GB+ FP binaries are written to scratch first, then staged to persistent.
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+RESULTS=$REPO/_metacentrum_results
+: "${INPUT:?set -v INPUT=<pool.parquet>}"
+: "${OUTPREFIX:?set -v OUTPREFIX=<dir/stem>}"
+SMILES_COL="${SMILES_COL:-smiles}"
+LOG=$RESULTS/fps_$(basename "$OUTPREFIX")_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$SCRATCHDIR/out" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+
+cd "$REPO"
+SCR_PREFIX="$SCRATCHDIR/out/$(basename "$OUTPREFIX")"
+"$ENV/bin/python" scripts/v1.5_candidates/compute_pool_fingerprints.py \
+  --input-parquet "$INPUT" --smiles-col "$SMILES_COL" \
+  --out-prefix "$SCR_PREFIX" --n-workers 48 --batch-size 1000000 2>&1 | tee "$LOG"
+
+DEST=$(dirname "$OUTPREFIX"); mkdir -p "$DEST"
+cp -fv "$SCRATCHDIR/out/"* "$DEST/" 2>&1 | tee -a "$LOG"
+echo "OK fps -> $DEST" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true
