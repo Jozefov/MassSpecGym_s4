@@ -79,22 +79,19 @@ assert rdkit_canonical_smiles("C1=CC=CC=C1") == "c1ccccc1"
 print("main OK: rdkit", rdkit.__version__, "torch", torch.__version__)
 PY
 
-# --- molpher env: morphing only ----------------------------------------------
-echo "=== building $ENV_MOLPHER ===" | tee -a "$LOG"
-mamba create -y -p "$ENV_MOLPHER" --override-channels -c conda-forge -c lich \
-  python=3.9 molpher-lib rdkit pandas numpy tqdm >>"$LOG" 2>&1
-
-echo "=== smoke test $ENV_MOLPHER ===" | tee -a "$LOG"
-"$ENV_MOLPHER/bin/python" - <<'PY' | tee -a "$LOG"
-import rdkit, molpher.core
-from molpher.core.morphing.operators import RerouteBond
-print("molpher OK: rdkit", rdkit.__version__)
-PY
+# --- molpher env -------------------------------------------------------------
+# NOTE: the conda `lich` molpher-lib package installs a broken extension
+# (`No module named '_core'`), so the pipeline uses the pre-existing
+# SOURCE-BUILT env `molpher_lib_build` (molpher 0.0.0b3 egg, RDKit 2021.03)
+# instead. TODO: script a reproducible molpher-lib source build so other users
+# can recreate it; until then this step is intentionally skipped.
+echo "=== molpher env: using source-built molpher_lib_build (see NOTE) ===" | tee -a "$LOG"
 
 # --- export exact lockfiles for reproducibility ------------------------------
 mkdir -p "$REPO/scripts/v1.5_candidates/envs"
-mamba env export -p "$ENV_MAIN"    > "$REPO/scripts/v1.5_candidates/envs/massspecgym_s4.lock.yml"    2>>"$LOG" || true
-mamba env export -p "$ENV_MOLPHER" > "$REPO/scripts/v1.5_candidates/envs/massspecgym_s4_molpher.lock.yml" 2>>"$LOG" || true
+mamba env export -p "$ENV_MAIN" > "$REPO/scripts/v1.5_candidates/envs/massspecgym_s4.lock.yml" 2>>"$LOG" || true
+# Lock the working source-built molpher env for reference (not created here).
+mamba env export -p "$PLZEN/.conda/envs/molpher_lib_build" > "$REPO/scripts/v1.5_candidates/envs/molpher_lib_build.lock.yml" 2>>"$LOG" || true
 
 echo "OK build_envs (main + molpher)" | tee -a "$LOG"
 cp "$LOG" "$RESULTS/" 2>/dev/null || true

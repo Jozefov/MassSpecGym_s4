@@ -14,7 +14,9 @@ set +u; source /etc/profile || true; set -u
 PLZEN=/storage/plzen1/home/jozefov_147
 REPO=$PLZEN/projects/MassSpecGym_s4
 ENV=$PLZEN/.conda/envs/massspecgym_s4
-ENVM=$PLZEN/.conda/envs/massspecgym_s4_molpher
+# The conda `lich` molpher-lib package is broken (No module named '_core'); use
+# the proven source-built env. A reproducible source build is a TODO.
+ENVM=$PLZEN/.conda/envs/molpher_lib_build
 DATA=$REPO/_data/v1.5
 RESULTS=$REPO/_metacentrum_results
 LOG=$RESULTS/molpher_gen_${PBS_JOBID:-manual}.log
