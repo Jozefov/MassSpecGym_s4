@@ -6,7 +6,7 @@ Rule (per Roman):
   - Keep ALL existing S4 candidates as-is (query at index 0, then S4-generated).
   - Append PubChem candidates whose 2D-InChIKey is NOT already present in the
     S4 list. Append in PubChem's existing order.
-  - Stop once total list length reaches 1024.
+  - Stop once total list length reaches 512.
   - Apply only to queries where the original S4 list length < 8.
 
 Source PubChem: ``MassSpecGym1.5_retrieval_candidates_{formula,mass}.json``
@@ -31,7 +31,7 @@ OUT_FORMULA = DATA / "MassSpecGym_S4plusPC_retrieval_candidates_formula.json"
 OUT_MASS    = DATA / "MassSpecGym_S4plusPC_retrieval_candidates_mass.json"
 
 THRESHOLD = 8       # augment when len(s4_list) < this
-CAP = 1024          # final list size cap
+CAP = 512           # final list cap; must match MAX_CANDIDATES in build_msg_s4_candidates.py
 
 
 # Worker pool globals.

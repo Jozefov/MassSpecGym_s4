@@ -8,7 +8,7 @@ Rule (per Roman):
     (RerouteBond operator), filter by 2D-InChIKey uniqueness vs the existing
     list AND the query itself, and select via greedy farthest-first Tanimoto
     diversity.
-  - Append until total list reaches the 1024 cap.
+  - Append until total list reaches the 512 cap.
 
 Requires the conda molpher env at
 ``/pfs/lustrep2/scratch/project_465002061/rbushuie/DreaMS-Mol_dev/molpher/.venv``.
@@ -39,7 +39,7 @@ OUT_JSON = DATA / "MassSpecGym_S4plusPCplusMol_retrieval_candidates_formula.json
 CHECKPOINT_JSON = DATA / "MassSpecGym_S4plusPCplusMol_checkpoint.json"
 
 THRESHOLD = 8
-CAP = 1024
+CAP = 512  # must match MAX_CANDIDATES in build_msg_s4_candidates.py
 MOLPHER_ATTEMPTS = 10_000
 RANDOM_SEED = 42
 N_WORKERS = int(os.environ.get("WORKERS", 32))
