@@ -163,8 +163,11 @@ def main() -> None:
         d = [p for p in (_packed(s) for s in ik_dec.get(iks[i], [])) if p is not None]
         cdecoy[i] = _tanimoto(Q[i], np.stack(d)).max() if d else 0.0
     q = q.assign(closest_test_T=ctest, separation=ctest - cdecoy)
-    debug = (q[q["closest_test_T"] < 0.95]
-             .sort_values("separation", ascending=False).head(args.top_n).reset_index(drop=True))
+    if args.top_n and args.top_n > 0:
+        debug = (q[q["closest_test_T"] < 0.95]
+                 .sort_values("separation", ascending=False).head(args.top_n).reset_index(drop=True))
+    else:  # full test fold
+        debug = q.sort_values("separation", ascending=False).reset_index(drop=True)
     qp_by_smi = {s: _packed(s) for s in debug["smiles"]}
     print(f"[sel] debug subset {len(debug)} queries; mass {debug['exact_mass'].min():.1f}..{debug['exact_mass'].max():.1f}", flush=True)
 
@@ -197,12 +200,12 @@ def main() -> None:
             seen = {r.inchikey_2d}
             picks: list[str] = []
             for idx in nearest:
+                if len(picks) >= K:
+                    break
                 ik = u_ik[idx]
                 if ik and ik not in seen:
                     seen.add(ik)
                     picks.append(u_smi[idx])
-                    if len(picks) >= K:
-                        break
             fill: list[str] = []
             for sl_ik, sl_smi, sims in per_pool:  # random base, S4 -> PubChem -> Molpher
                 need = CAP - len(picks) - len(fill)

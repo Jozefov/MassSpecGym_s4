@@ -21,7 +21,10 @@ CANDJSON="${CANDJSON:-$RHC/MassSpecGym1.5_gen_retrieval_candidates_mass.json}"
 LABEL="${LABEL:-mass_baseline}"
 TOPN="${TOPN:-300}"
 DEBUGIKS="${DEBUGIKS:-}"
-EXTRA=""; [ -n "$DEBUGIKS" ] && EXTRA="--debug-iks $DEBUGIKS"
+OUTCSV="${OUTCSV:-}"
+EXTRA=""
+[ -n "$DEBUGIKS" ] && EXTRA="$EXTRA --debug-iks $DEBUGIKS"
+[ -n "$OUTCSV" ] && EXTRA="$EXTRA --out-csv $OUTCSV"
 LOG=$RESULTS/metrics_${LABEL}_${PBS_JOBID:-manual}.log
 mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
 test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }

@@ -85,7 +85,7 @@ def _score_query(args) -> tuple | None:
     decoy_sims = np.asarray(DataStructs.BulkTanimotoSimilarity(cand_fps[0], cand_fps[1:]))
     closest_decoy_T = float(decoy_sims.max()) if len(decoy_sims) else 0.0
     dup = closest_decoy_T >= DUP_T
-    return (rank_a15 < 20, rank_a45 < 20, dup, closest_decoy_T)
+    return (answer_ik, rank_a15 < 20, rank_a45 < 20, dup, closest_decoy_T)
 
 
 def _init(test_fps, test_ik):
@@ -104,6 +104,7 @@ def main() -> None:
     ap.add_argument("--label", default="baseline")
     ap.add_argument("--debug-iks", default=None,
                     help="JSON list of query ik2d to score (fixed subset); else top-N by separation")
+    ap.add_argument("--out-csv", default=None, help="per-query results CSV for tier breakdown")
     args = ap.parse_args()
     RDLogger.DisableLog("rdApp.*")
 
@@ -163,15 +164,24 @@ def main() -> None:
     with mp.get_context("fork").Pool(args.n_workers, initializer=_init,
                                      initargs=(test_fps, test_ik)) as pool:
         res = [r for r in pool.map(_score_query, tasks) if r is not None]
-    a15 = np.mean([r[0] for r in res])
-    a45 = np.mean([r[1] for r in res])
-    dup = np.mean([r[2] for r in res])
-    cdt = np.mean([r[3] for r in res])
-    print(f"\n[eval] === {args.label} (n={len(res)}) ===")
+    rdf = pd.DataFrame(res, columns=["ik", "hit_a15", "hit_a45", "dup", "cdt"]).merge(
+        debug[["ik", "separation", "closest_test_T"]], on="ik", how="left")
+    a15, a45, dup, cdt = rdf.hit_a15.mean(), rdf.hit_a45.mean(), rdf.dup.mean(), rdf.cdt.mean()
+    print(f"\n[eval] === {args.label} (n={len(rdf)}) ===")
     print(f"[eval] a15 test-twin top-20 : {a15*100:.1f}%   (push toward ~10%)")
     print(f"[eval] a45 centroid  top-20 : {a45*100:.1f}%   (keep flat ~ random {20/512*100:.1f}%)")
     print(f"[eval] dup>=0.99 in set     : {dup*100:.1f}%   (want ~0)")
     print(f"[eval] mean closest_decoy_T : {cdt:.3f}   (ceiling = per-query closest_test_T)")
+    for lab, m in [("sep>0.4 (hard)", rdf.separation > 0.4),
+                   ("sep 0.2-0.4", (rdf.separation > 0.2) & (rdf.separation <= 0.4)),
+                   ("sep<=0.2 (easy)", rdf.separation <= 0.2)]:
+        s = rdf[m]
+        if len(s):
+            print(f"[eval]   tier {lab} (n={len(s)}): a15={s.hit_a15.mean()*100:.1f}% "
+                  f"a45={s.hit_a45.mean()*100:.1f}% dup={s.dup.mean()*100:.1f}%")
+    if args.out_csv:
+        rdf.to_csv(args.out_csv, index=False)
+        print(f"[eval] wrote per-query {args.out_csv}")
 
 
 if __name__ == "__main__":
