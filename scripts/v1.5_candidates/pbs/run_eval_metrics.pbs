@@ -1,0 +1,33 @@
+#!/bin/bash
+#PBS -N msg_s4_metrics
+#PBS -l select=1:ncpus=32:mem=48gb:scratch_local=10gb
+#PBS -l walltime=4:00:00
+#PBS -j oe
+#
+# Score a candidate JSON on a15/a45/dup over the test-fold debug subset.
+# Parameterised via -v:
+#   qsub -v CANDJSON=<json>,LABEL=<name> scripts/v1.5_candidates/pbs/run_eval_metrics.pbs
+# Default = the mass baseline.
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+RHC=$PLZEN/projects/retrieval_hacking_challenge/_data_gen
+RESULTS=$REPO/_metacentrum_results
+CANDJSON="${CANDJSON:-$RHC/MassSpecGym1.5_gen_retrieval_candidates_mass.json}"
+LABEL="${LABEL:-mass_baseline}"
+TOPN="${TOPN:-300}"
+LOG=$RESULTS/metrics_${LABEL}_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/eval_candidate_metrics.py \
+  --queries-parquet "$DATA/queries/massspecgym_query_molecules.parquet" \
+  --candidates-json "$CANDJSON" \
+  --fold test --top-n "$TOPN" --n-workers 32 --label "$LABEL" 2>&1 | tee "$LOG"
+echo "OK eval_metrics $LABEL" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true
