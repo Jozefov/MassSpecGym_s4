@@ -161,17 +161,19 @@ def main() -> None:
             continue
         bik = np.concatenate(ik_a); bsmi = np.concatenate(smi_a)
         bsgt = np.concatenate(simgt_a); bstest = np.concatenate(simtest_a)
+        bsrc = np.concatenate([np.full(len(a), i) for i, a in enumerate(ik_a)])  # 0=S4,1=PubChem,2=Molpher
         ok = bsgt < DUP_T  # never include near-identical decoys (solvable)
-        bik, bsmi, bsgt, bstest = bik[ok], bsmi[ok], bsgt[ok], bstest[ok]
+        bik, bsmi, bsgt, bstest, bsrc = bik[ok], bsmi[ok], bsgt[ok], bstest[ok], bsrc[ok]
         for s in strategies:
             if s == "random":
-                order = rng.permutation(len(bik)).astype(float)
-                decoys = _pick(bik, bsmi, order, CAP, r.inchikey_2d)
+                m = bsrc == 0  # S4-only base: measured-like + GT-far -> a45 stays low
+                decoys = _pick(bik[m], bsmi[m], rng.permutation(int(m.sum())).astype(float),
+                               CAP, r.inchikey_2d)
             elif s == "testlike":
-                # measured-like (high max-sim-to-test) but NOT hugging the GT
-                # (sim-to-GT <= closest_test_T) so we don't recreate the a45
-                # centroid leak; this prefers decoys near *other* test molecules.
-                m = bsgt <= cap
+                # measured-like AND nearer to ANOTHER test molecule than to the GT
+                # (bstest > bsgt = leave-one-out): excludes the GT's own morphs
+                # (which score high via the GT itself) -> avoids the a45 leak.
+                m = (bstest > bsgt) & (bsgt <= cap)
                 decoys = _pick(bik[m], bsmi[m], bstest[m], CAP, r.inchikey_2d)
             elif s == "testlike_spread":
                 m = bsgt <= cap
