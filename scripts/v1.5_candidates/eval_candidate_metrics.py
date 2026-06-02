@@ -102,6 +102,8 @@ def main() -> None:
     ap.add_argument("--top-n", type=int, default=300)
     ap.add_argument("--n-workers", type=int, default=32)
     ap.add_argument("--label", default="baseline")
+    ap.add_argument("--debug-iks", default=None,
+                    help="JSON list of query ik2d to score (fixed subset); else top-N by separation")
     args = ap.parse_args()
     RDLogger.DisableLog("rdApp.*")
 
@@ -147,9 +149,15 @@ def main() -> None:
         print(f"[eval] VERIFY C48H81N9O8: test_T={r.closest_test_T:.3f} decoy_T={r.closest_decoy_T:.3f} "
               f"sep={r.separation:.3f} n_decoys={int(r.n_decoys)}", flush=True)
 
-    debug = df[(df["closest_test_T"] < 0.95)].sort_values("separation", ascending=False).head(args.top_n)
-    print(f"[eval] debug subset: {len(debug)} queries (top-{args.top_n}, test_T<0.95); "
-          f"sep range {debug.separation.min():.3f}..{debug.separation.max():.3f}", flush=True)
+    if args.debug_iks:
+        order = {ik: i for i, ik in enumerate(json.load(open(args.debug_iks)))}
+        debug = df[df["ik"].isin(order)].copy()
+        debug = debug.iloc[debug["ik"].map(order).argsort().to_numpy()]
+        print(f"[eval] debug subset: {len(debug)}/{len(order)} from --debug-iks", flush=True)
+    else:
+        debug = df[df["closest_test_T"] < 0.95].sort_values("separation", ascending=False).head(args.top_n)
+        print(f"[eval] debug subset: {len(debug)} queries (top-{args.top_n}, test_T<0.95); "
+              f"sep range {debug.separation.min():.3f}..{debug.separation.max():.3f}", flush=True)
 
     tasks = [(r.smiles, r.ik, ik_to_decoys.get(r.ik, [])) for r in debug.itertuples()]
     with mp.get_context("fork").Pool(args.n_workers, initializer=_init,

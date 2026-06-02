@@ -20,6 +20,8 @@ RESULTS=$REPO/_metacentrum_results
 CANDJSON="${CANDJSON:-$RHC/MassSpecGym1.5_gen_retrieval_candidates_mass.json}"
 LABEL="${LABEL:-mass_baseline}"
 TOPN="${TOPN:-300}"
+DEBUGIKS="${DEBUGIKS:-}"
+EXTRA=""; [ -n "$DEBUGIKS" ] && EXTRA="--debug-iks $DEBUGIKS"
 LOG=$RESULTS/metrics_${LABEL}_${PBS_JOBID:-manual}.log
 mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
 test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
@@ -28,6 +30,6 @@ cd "$REPO"
 "$ENV/bin/python" scripts/v1.5_candidates/eval_candidate_metrics.py \
   --queries-parquet "$DATA/queries/massspecgym_query_molecules.parquet" \
   --candidates-json "$CANDJSON" \
-  --fold test --top-n "$TOPN" --n-workers 32 --label "$LABEL" 2>&1 | tee "$LOG"
+  --fold test --top-n "$TOPN" --n-workers 32 --label "$LABEL" $EXTRA 2>&1 | tee "$LOG"
 echo "OK eval_metrics $LABEL" | tee -a "$LOG"
 cp "$LOG" "$RESULTS/" 2>/dev/null || true
