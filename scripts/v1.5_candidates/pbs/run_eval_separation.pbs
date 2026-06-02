@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N msg_s4_sep
+#PBS -l select=1:ncpus=8:mem=24gb:scratch_local=10gb
+#PBS -l walltime=2:00:00
+#PBS -j oe
+#
+# Baseline separation table for the test fold (formula candidates).
+#   qsub scripts/v1.5_candidates/pbs/run_eval_separation.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+RHC=$PLZEN/projects/retrieval_hacking_challenge/_data_gen
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/sep_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$DATA/analysis" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/eval_separation.py \
+  --queries-parquet "$DATA/queries/massspecgym_query_molecules.parquet" \
+  --candidates-json "$RHC/MassSpecGym1.5_gen_retrieval_candidates_formula.json" \
+  --fold test \
+  --out-csv "$DATA/analysis/separation_formula_test_baseline.csv" 2>&1 | tee "$LOG"
+echo "OK eval_separation" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true
