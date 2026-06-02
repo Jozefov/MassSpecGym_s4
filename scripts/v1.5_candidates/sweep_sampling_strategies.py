@@ -33,18 +33,35 @@ from select_hybrid_candidates import (
 )
 
 
-def _max_sim_to_test(fps: np.ndarray, testQ: np.ndarray) -> np.ndarray:
-    """For each packed FP in `fps` (n,256), max Tanimoto to any test FP (T,256)."""
+_TESTQ_G = None  # test packed FPs, shared with forked workers
+
+
+def _mlt_init(testQ):
+    global _TESTQ_G
+    _TESTQ_G = testQ
+
+
+def _mlt_chunk(fps_chunk: np.ndarray) -> np.ndarray:
+    Q = _TESTQ_G
+    bpop = _POP[fps_chunk].sum(1)
+    tpop = _POP[Q].sum(1)
+    best = np.zeros(len(fps_chunk))
+    for t in range(len(Q)):
+        inter = _POP[Q[t] & fps_chunk].sum(1)
+        np.maximum(best, inter / np.maximum(tpop[t] + bpop - inter, 1), out=best)
+    return best
+
+
+def _max_sim_to_test(fps: np.ndarray, testQ: np.ndarray, nproc: int = 32) -> np.ndarray:
+    """For each packed FP in `fps` (n,256), max Tanimoto to any test FP (T,256).
+    Parallelised over pool chunks (single-threaded was the run's bottleneck)."""
+    import multiprocessing as mp
     if len(fps) == 0:
         return np.zeros(0)
-    bpop = _POP[fps].sum(1)
-    tpop = _POP[testQ].sum(1)
-    best = np.zeros(len(fps))
-    for t in range(len(testQ)):
-        inter = _POP[testQ[t] & fps].sum(1)
-        sim = inter / np.maximum(tpop[t] + bpop - inter, 1)
-        np.maximum(best, sim, out=best)
-    return best
+    chunks = [c for c in np.array_split(np.arange(len(fps)), max(1, nproc * 4)) if len(c)]
+    with mp.get_context("fork").Pool(nproc, initializer=_mlt_init, initargs=(testQ,)) as pool:
+        parts = pool.map(_mlt_chunk, [fps[c] for c in chunks])
+    return np.concatenate(parts)
 
 
 def _pick(ik, smi, score_desc, k, gt_ik, seen=None):
@@ -67,7 +84,8 @@ def main() -> None:
     ap.add_argument("--mass-json", required=True)
     ap.add_argument("--cache-dir", required=True, help="pool_cache_topN dir from the selector")
     ap.add_argument("--top-n", type=int, default=300)
-    ap.add_argument("--strategies", default="random,testlike,testlike_spread,unionnearest64")
+    ap.add_argument("--strategies", default="random,testlike,twinmorph,unionnearest64")
+    ap.add_argument("--morphs-json", default=None, help="molpher_morphs_per_query.json (for twinmorph)")
     ap.add_argument("--out-dir", required=True)
     args = ap.parse_args()
     RDLogger.DisableLog("rdApp.*")
@@ -102,6 +120,15 @@ def main() -> None:
              .head(args.top_n).reset_index(drop=True))
     qp_by_smi = {s: _packed(s) for s in debug["smiles"]}
     print(f"[sweep] {len(debug)} debug queries; strategies={strategies}", flush=True)
+
+    # twinmorph source: per-query Molpher morphs + sorted test masses (to find iso-mass test twins)
+    morphs_json = json.load(open(args.morphs_json)) if args.morphs_json else {}
+    torder = np.argsort(q["exact_mass"].to_numpy())
+    tmass_s = q["exact_mass"].to_numpy()[torder]
+    tsmi_s = q["smiles"].to_numpy()[torder]
+    tik_s = iks[torder]
+    if "twinmorph" in strategies:
+        print(f"[sweep] twinmorph: morphs for {len(morphs_json):,} queries loaded", flush=True)
 
     # pool slices (cached) + their measured-likeness (max sim to test), computed once
     intervals = _merge_windows(debug["exact_mass"].to_numpy())
@@ -164,6 +191,35 @@ def main() -> None:
                 fill = _pick(bik, bsmi, rng.permutation(len(bik)).astype(float),
                              CAP - len(picks), r.inchikey_2d, seen=seen)
                 decoys = picks + fill
+            elif s == "twinmorph":
+                # decoys = Molpher morphs of the GT's iso-mass TEST neighbors:
+                # near a real test molecule (a15 down), not near the GT (a45 flat).
+                tol2 = r.exact_mass * PPM * 1e-6
+                jlo = np.searchsorted(tmass_s, r.exact_mass - tol2, "left")
+                jhi = np.searchsorted(tmass_s, r.exact_mass + tol2, "right")
+                gathered = []
+                for j in range(jlo, jhi):
+                    if tik_s[j] == r.inchikey_2d:
+                        continue
+                    gathered.extend(morphs_json.get(tsmi_s[j], []))
+                    if len(gathered) > CAP * 6:
+                        break
+                seen = {r.inchikey_2d}
+                decoys = []
+                for sm in gathered:
+                    p = _packed(sm)
+                    if p is None or _tanimoto(qp_, p[None, :])[0] >= DUP_T:
+                        continue
+                    ikk = _ik2d(sm)
+                    if not ikk or ikk in seen:
+                        continue
+                    seen.add(ikk)
+                    decoys.append(sm)
+                    if len(decoys) >= CAP:
+                        break
+                if len(decoys) < CAP:  # top up with measured-like S4 random base
+                    decoys += _pick(bik, bsmi, rng.permutation(len(bik)).astype(float),
+                                    CAP - len(decoys), r.inchikey_2d, seen=seen)
             else:
                 raise SystemExit(f"unknown strategy {s}")
             out[s][r.smiles] = [r.smiles] + decoys
