@@ -1,0 +1,30 @@
+#!/bin/bash
+#PBS -N msg_s4_inject
+#PBS -l select=1:ncpus=32:mem=48gb:scratch_local=10gb
+#PBS -l walltime=4:00:00
+#PBS -j oe
+#
+# Inject K similarity picks into the real v1.5 baseline candidate sets (minority
+# design). qsub scripts/v1.5_candidates/pbs/run_inject.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+MASS=$PLZEN/projects/retrieval_hacking_challenge/_data_gen/MassSpecGym1.5_gen_retrieval_candidates_mass.json
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/inject_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/inject_k_picks.py \
+  --data-dir "$DATA" \
+  --queries-parquet "$DATA/queries/massspecgym_query_molecules.parquet" \
+  --mass-json "$MASS" \
+  --cache-dir "$DATA/analysis/hybrid_debug/pool_cache_top300" \
+  --morphs-json "$DATA/pools/molpher/molpher_morphs_per_query.json" \
+  --methods twin,testlike,unionnear --ks 32,64 --top-n 300 \
+  --out-dir "$DATA/analysis/inject" 2>&1 | tee "$LOG"
+echo "OK inject" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true
