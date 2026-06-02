@@ -21,7 +21,7 @@ import pandas as pd
 from rdkit import RDLogger
 
 from select_hybrid_candidates import (
-    _ik2d, _merge_windows, _packed, _slice_pool, _tanimoto, DUP_T, PPM, POOLS,
+    _ik2d, _merge_windows, _packed, _slice_pool, _tanimoto, _POP, DUP_T, PPM, POOLS,
 )
 from sweep_sampling_strategies import _max_sim_to_test
 
@@ -38,6 +38,28 @@ def _distinct_take(smis, n, gt_ik, seen=None):
             seen.add(ik)
             out.append(sm)
     return out
+
+
+def _farthest_first(smis, fps, n, gt_ik):
+    """Greedy farthest-first (max-min packed-Tanimoto distance) for diversity."""
+    keep_s, keep_f, seen = [], [], {gt_ik}
+    for sm, fp in zip(smis, fps):
+        ik = _ik2d(sm)
+        if ik and ik not in seen:
+            seen.add(ik); keep_s.append(sm); keep_f.append(fp)
+    if len(keep_s) <= n:
+        return keep_s
+    F = np.stack(keep_f); pop = _POP[F].sum(1)
+    def _sim(i):
+        inter = _POP[F[i] & F].sum(1)
+        return inter / np.maximum(pop[i] + pop - inter, 1)
+    chosen = [0]
+    mind = 1.0 - _sim(0)
+    while len(chosen) < n:
+        i = int(np.argmax(mind))
+        chosen.append(i)
+        np.minimum(mind, 1.0 - _sim(i), out=mind)
+    return [keep_s[i] for i in chosen]
 
 
 def main() -> None:
@@ -107,19 +129,32 @@ def main() -> None:
         base = list(ik_dec.get(r.inchikey_2d, []))
         rng.shuffle(base)
         picks = {}
-        if "twin" in methods:
-            gathered = []
+        # --- twin family: morphs of iso-mass TEST neighbours ---
+        if any(m.startswith("twin") for m in methods) or "mixed" in methods:
             jlo = np.searchsorted(tmass_s, r.exact_mass - tol, "left")
             jhi = np.searchsorted(tmass_s, r.exact_mass + tol, "right")
+            g_smi, g_fp, g_sgt = [], [], []
             for j in range(jlo, jhi):
-                if tik_s[j] != r.inchikey_2d:
-                    gathered.extend(morphs_json.get(tsmi_s[j], []))
-            gathered = [sm for sm in gathered
-                        if (p := _packed(sm)) is not None and _tanimoto(qp_, p[None, :])[0] < DUP_T]
-            picks["twin"] = _distinct_take(gathered, kmax, r.inchikey_2d)
-        if "testlike" in methods or "unionnear" in methods:
-            ik_a, smi_a, sgt_a, st_a = [], [], [], []
-            for name, _, _ in POOLS:
+                if tik_s[j] == r.inchikey_2d:
+                    continue
+                for sm in morphs_json.get(tsmi_s[j], []):
+                    p = _packed(sm)
+                    if p is None:
+                        continue
+                    sg = _tanimoto(qp_, p[None, :])[0]
+                    if sg < DUP_T:
+                        g_smi.append(sm); g_fp.append(p); g_sgt.append(sg)
+            g_sgt = np.asarray(g_sgt)
+            picks["twin"] = _distinct_take(g_smi, kmax, r.inchikey_2d)
+            if "twin_farthest" in methods:
+                picks["twin_farthest"] = _farthest_first(g_smi, g_fp, kmax, r.inchikey_2d)
+            if "twin_band" in methods:
+                band = [g_smi[i] for i in range(len(g_smi)) if 0.3 <= g_sgt[i] <= cap]
+                picks["twin_band"] = _distinct_take(band, kmax, r.inchikey_2d)
+        # --- pool-based picks (testlike / source-specific / unionnear) ---
+        if any(m in methods for m in ("testlike", "s4_testlike", "pubchem_testlike", "unionnear", "mixed")):
+            ik_a, smi_a, sgt_a, st_a, src_a = [], [], [], [], []
+            for pi, (name, _, _) in enumerate(POOLS):
                 mass, ik, smi, fps, simtest = pools[name]
                 lo = np.searchsorted(mass, r.exact_mass - tol, "left")
                 hi = np.searchsorted(mass, r.exact_mass + tol, "right")
@@ -127,14 +162,25 @@ def main() -> None:
                     continue
                 ik_a.append(ik[lo:hi]); smi_a.append(smi[lo:hi]); sgt_a.append(_tanimoto(qp_, fps[lo:hi]))
                 st_a.append(simtest[lo:hi] if simtest is not None else np.zeros(hi - lo))
+                src_a.append(np.full(hi - lo, pi))
             if ik_a:
-                bsmi = np.concatenate(smi_a); bsgt = np.concatenate(sgt_a); bst = np.concatenate(st_a)
+                bsmi = np.concatenate(smi_a); bsgt = np.concatenate(sgt_a)
+                bst = np.concatenate(st_a); bsrc = np.concatenate(src_a)
+                order_st = np.argsort(-bst)
+                tl = (bst > bsgt) & (bsgt <= cap)  # measured-like, leave-one-out
+                _tl = lambda mask: _distinct_take([bsmi[i] for i in order_st if mask[i]], kmax, r.inchikey_2d)
+                picks["testlike"] = _tl(tl)
+                if "s4_testlike" in methods:
+                    picks["s4_testlike"] = _tl(tl & (bsrc == 0))
+                if "pubchem_testlike" in methods:
+                    picks["pubchem_testlike"] = _tl(tl & (bsrc == 1))
                 if "unionnear" in methods:
-                    m = (bsgt <= cap) & (bsgt > 0)
-                    picks["unionnear"] = _distinct_take([bsmi[i] for i in np.argsort(-bsgt) if m[i]], kmax, r.inchikey_2d)
-                if "testlike" in methods:
-                    m = (bst > bsgt) & (bsgt <= cap)
-                    picks["testlike"] = _distinct_take([bsmi[i] for i in np.argsort(-bst) if m[i]], kmax, r.inchikey_2d)
+                    mn = (bsgt <= cap) & (bsgt > 0)
+                    picks["unionnear"] = _distinct_take([bsmi[i] for i in np.argsort(-bsgt) if mn[i]], kmax, r.inchikey_2d)
+        if "mixed" in methods:  # interleave twin + testlike
+            a, b = picks.get("twin", []), picks.get("testlike", [])
+            inter = [x for pair in zip(a, b) for x in pair] + a[len(b):] + b[len(a):]
+            picks["mixed"] = _distinct_take(inter, kmax, r.inchikey_2d)
         for mth in methods:
             pk = picks.get(mth, [])
             for K in ks:

@@ -24,7 +24,7 @@ cd "$REPO"
   --mass-json "$MASS" \
   --cache-dir "$DATA/analysis/hybrid_debug/pool_cache_top300" \
   --morphs-json "$DATA/pools/molpher/molpher_morphs_per_query.json" \
-  --methods twin,testlike,unionnear --ks 32,64 --top-n 300 \
+  --methods twin,twin_farthest,twin_band,testlike,s4_testlike,pubchem_testlike,mixed,unionnear --ks 32,64 --top-n 300 \
   --out-dir "$DATA/analysis/inject" 2>&1 | tee "$LOG"
 echo "OK inject" | tee -a "$LOG"
 cp "$LOG" "$RESULTS/" 2>/dev/null || true
