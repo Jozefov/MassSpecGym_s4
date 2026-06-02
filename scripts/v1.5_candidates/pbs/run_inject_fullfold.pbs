@@ -1,0 +1,31 @@
+#!/bin/bash
+#PBS -N msg_s4_inject_ff
+#PBS -l select=1:ncpus=32:mem=96gb:scratch_local=20gb
+#PBS -l walltime=8:00:00
+#PBS -j oe
+#
+# FULL test fold: inject K=32 picks (twin / testlike / mixed) into the real v1.5
+# baseline candidate sets, for all ~2,997 test queries.
+#   qsub scripts/v1.5_candidates/pbs/run_inject_fullfold.pbs
+set -euo pipefail
+set +u; source /etc/profile || true; set -u
+PLZEN=/storage/plzen1/home/jozefov_147
+REPO=$PLZEN/projects/MassSpecGym_s4
+ENV=$PLZEN/.conda/envs/massspecgym_s4
+DATA=$REPO/_data/v1.5
+MASS=$PLZEN/projects/retrieval_hacking_challenge/_data_gen/MassSpecGym1.5_gen_retrieval_candidates_mass.json
+RESULTS=$REPO/_metacentrum_results
+LOG=$RESULTS/inject_ff_${PBS_JOBID:-manual}.log
+mkdir -p "$RESULTS" "$SCRATCHDIR/tmp"; export TMPDIR=$SCRATCHDIR/tmp
+test "$(whoami)" = jozefov_147 || { echo wrong account; exit 10; }
+cd "$REPO"
+"$ENV/bin/python" scripts/v1.5_candidates/inject_k_picks.py \
+  --data-dir "$DATA" \
+  --queries-parquet "$DATA/queries/massspecgym_query_molecules.parquet" \
+  --mass-json "$MASS" \
+  --cache-dir "$DATA/analysis/hybrid_debug/pool_cache_top0" \
+  --morphs-json "$DATA/pools/molpher/molpher_morphs_per_query.json" \
+  --methods twin,testlike,mixed --ks 32 --top-n 0 \
+  --out-dir "$DATA/analysis/inject_fullfold" 2>&1 | tee "$LOG"
+echo "OK inject_ff" | tee -a "$LOG"
+cp "$LOG" "$RESULTS/" 2>/dev/null || true

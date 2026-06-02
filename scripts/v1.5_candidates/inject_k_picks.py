@@ -104,8 +104,11 @@ def main() -> None:
         d = [p for p in (_packed(s) for s in ik_dec.get(iks[i], [])) if p is not None]
         cdecoy[i] = _tanimoto(Q[i], np.stack(d)).max() if d else 0.0
     q = q.assign(closest_test_T=ctest, separation=ctest - cdecoy)
-    debug = (q[q["closest_test_T"] < 0.95].sort_values("separation", ascending=False)
-             .head(args.top_n).reset_index(drop=True))
+    if args.top_n and args.top_n > 0:
+        debug = (q[q["closest_test_T"] < 0.95].sort_values("separation", ascending=False)
+                 .head(args.top_n).reset_index(drop=True))
+    else:  # full test fold
+        debug = q.sort_values("separation", ascending=False).reset_index(drop=True)
     qp_by_smi = {s: _packed(s) for s in debug["smiles"]}
     print(f"[inject] {len(debug)} debug queries; methods={methods} ks={ks}", flush=True)
 
@@ -135,6 +138,8 @@ def main() -> None:
             jhi = np.searchsorted(tmass_s, r.exact_mass + tol, "right")
             g_smi, g_fp, g_sgt = [], [], []
             for j in range(jlo, jhi):
+                if len(g_smi) > 3000:  # bound per-query gather for full-fold tractability
+                    break
                 if tik_s[j] == r.inchikey_2d:
                     continue
                 for sm in morphs_json.get(tsmi_s[j], []):
